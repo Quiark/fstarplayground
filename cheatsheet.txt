@@ -1,0 +1,124 @@
+% vi:ft=markdown
+
+# Cheatsheet #
+type alias = int  // create a type named alias 
+kind Alias = 
+val x : type      // for giving `x` a type
+assume val  x     // we are promising that x exists somewhere (external module?) 
+assert y          // Fstar will prove that y is true. Not a dynamic check 
+
+In Fstar, types are rather equivalent with (boolean) formulas
+
+value : 1, 2, 'a', 'b', ...
+type : set of values with a computable definition
+kind : set of types with a computable definition
+
+STATE : uses predicate transformers
+ST : uses pre and post conditions on the main heap
+St : like ST but with empty pre, post conditions
+
+# Syntax #
+## For refining a type ##
+e: type{ refinement proposition }
+// needs parentheses
+```
+Tot (e: type{ refinement })
+```
+
+## alternatives ##
+// not saying how it's stored internally
+type point: int -> int -> Type
+
+## union types ##
+
+Some?.v      // gets value of an `Option`
+			 // Option.get is not useful, it ignores (throws?) on the None case and
+			 // cannot be used to prove lemmas (because F* doesn't have its definition)
+
+# Compiling #
+
+Have to have --build-config at top of file like in tmac.fst. All used files
+must be transitively included it seems.
+
+I did in fact fix the Seq module to provide some missing refined types. They
+are already specified in the GitHub version.
+
+# Caveats #
+
+* Have a function using side effects but somehow its modifications are not
+  visible? Make sure it has the ST return effect.
+* implicit type argument 'a doesn't seem to work when I also require to have
+  {hasEq 'a}. Probably have to state the type argument as an `#a` argument
+* careful about variable binding / reusing variable in match and function argument
+	srsly, this is wrong:
+	```
+	let fn lst t =
+		match lst with
+		| t::xs ->
+		| _::xs ->
+		| [] ->
+	```
+
+## Changes to heap over multiple function calls ##
+
+In pseudocode, if we have
+```
+val store_something: unit -> (ensures (Heap.sel h1 gl2) = something)
+val store_something_else: unit -> (ensures (Heap.sel h1 gl2) = something_else)
+store_something ();
+store_something_else ();
+```
+
+Then the postcondition from the first one may no longer be valid, probably
+because of aliasing. We need to state in the post-condition of
+`store_something_else` that the heap is the same.
+
+## Required pre-conditions when working with heap ##
+`Heap.contains h r` otherwise can't do `Heap.sel`. That's obvious in the documentation but not
+so much when coding.
+
+`ref1 <> ref2` was not required, not sure why.
+
+# Tricks #
+## Stating a proposition ##
+type temperature_is: string -> int -> Type
+
+val getting_hot: place:string -> degrees:int -> (u:unit{ temperature_is place degrees })
+let getting_hot place degrees = assume (temperature_is place degrees)
+
+let main () = 
+	getting_hot "HK" 33;
+	assert (temperature_is "HK" 33)
+
+But note: it behaves like a relation. For instance, the same place can have
+multiple temperatures assigned. You may need to use `forall` to restrict
+things a bit.
+
+## debugging ##
+`--log_types`
+
+use a weaker proposition to see if it works
+
+# tut notes #
+## STLC ##
+subst x e i     // substitute e for x in i
+free_in_context x e g
+    `x` appears free in `e` ==> g x is defined
+
+substitution_preserves_typing x e v g
+    uses `subst x v e`
+    so it means "substitution v for x in e"
+    proves that "typing after subst is same as typing when x:typing v"
+    which is ?
+
+    let gx   // extended g with type of v (same as x)
+
+    match e with
+    | ELet v' e' i' ->
+        means "let v' be e' in i'"
+        the root theorem means "
+            when (substituting v for x in (let v' be e' in i'))
+            then (typing after subst) = (typing when x: typing v)"
+        for e' use induction directly
+        for i', 
+            | 
