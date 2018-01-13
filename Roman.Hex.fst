@@ -22,11 +22,13 @@ assume val to_byte: x:nat -> b:byte {v b = x}
 type in_hexchar x = x <^ (to_byte (length hexchars))
 type bits4 = x:byte {in_hexchar x}
 
-let hexcharstr (i: bits4) =
+val hexcharstr: i: bits4 -> (s: string {String.length s = 1})
+let hexcharstr i =
     String.string_of_char (nth4sure hexchars (v i))
 
 // TODO: model a byte as a pair of 4 bits
 
+// ========= PAIR -- BYTE =================
 // this one could use logand_le which is defined for uint_t
 assume val bitand_smaller: x:byte -> y:byte -> Lemma ((x &^ y) <=^ y)
 // using logand_associative and logand_self
@@ -54,8 +56,8 @@ assume val big_lemma: x: bits4 -> y:bits4 -> Lemma ( (((x <<^ 4ul) |^ (y &^ 0xFu
 
 // val reduce1: hi:byte -> lo:byte -> Lemma ()
 val byte2pair: b:byte -> p: (bits4 * bits4){
-    fst p <=^ 0xFuy /\
-    snd p <=^ 0xFuy /\
+    //fst p <=^ 0xFuy /\
+    //snd p <=^ 0xFuy /\
     snd p == (b &^ 0xFuy) /\
     (((fst p) <<^ 4ul) |^ ((snd p) &^ 0xFuy)) == b
     }
@@ -73,9 +75,40 @@ let byte2pair b =
     assert (lo <^ 16uy);
     (hi, lo)
 
-let pair2hex (h, l) =
-    len_lemma 16;
-    strcat (hexcharstr l) (hexcharstr h)
+assume val bits4_equal_lemma: (a: bits4) -> (b: byte {(a &^ 0xFuy) = (b &^ 0xFuy)}) -> Lemma (a = (b &^ 0xFuy))
+
+val pair2byte: p:(bits4 * bits4) -> b:byte{
+    ((b >>^ 4ul) &^ 0xFuy, b &^ 0xFuy) = (fst p, snd p)
+}
+let pair2byte (hi, lo) =
+    bitand_idempotent lo;
+    bitand_idempotent (hi >>^ 4ul);
+    bitand_idempotent hi;
+    bitorshl_unaffect hi (lo &^ 0xFuy);
+    big_lemma hi lo;
+    let r = (hi <<^ 4ul) |^ (lo &^ 0xFuy) in
+    let rhi = (r >>^ 4ul) &^ 0xFuy in
+    let rlo = r &^ 0xFuy in
+    assert (rlo = (lo &^ 0xFuy));
+    assert ((rhi &^ 0xFuy) = (hi &^ 0xFuy));
+    bits4_equal_lemma hi rhi;
+    bits4_equal_lemma lo rlo;
+    r
+    // ((hi <<^ 4ul) |^ (lo &^ 0xFuy)) &^ F =need= lo & F
+    // (lo & F) & F =need= lo & F  bitorshl_unaffect hi (lo & F)
+    // lo & F == lo & F   bitand_idempotent lo
+
+    // the left part
+    // (((hi << 4) | (lo & F)) >> 4) & F =need  = hi & F
+
+val pair_encode_decode_lemma: b:byte -> Lemma (b = pair2byte (byte2pair b))
+let pair_encode_decode_lemma b = ()
+
+val pair_decode_encode_lemma: p:(bits4 * bits4) -> Lemma (p = (byte2pair (pair2byte p)))
+let pair_decode_encode_lemma p = ()
+
+// ========= PAIR -- HEX =================
+
 
 val indexOf: (#a: eqtype) -> (l:list a {(length l) <= 255}) -> t:a -> 
             Tot (n:option byte { (n = None) \/ ((Some?.v n) <^ (to_byte (length l))) })
@@ -102,12 +135,12 @@ assume val option_lemma: (#a: Type {hasEq a}) -> (x: a) -> Lemma (x = Some?.v (S
 
 val nth4sure_first_lemma: ( #a: Type {hasEq a} ) -> (t: a) -> (xs: list a) -> Lemma (nth4sure (t::xs) 0 = t)
 let nth4sure_first_lemma #a t xs = 
-  assert (nth (t::xs) 0 = Some t);
-  // da fuq why can't I use the lemma to prove this
-  option_lemma t;
-  assert (Some?.v (Some t) = t);
-  assert (Some?.v (nth (t::xs) 0) = t);
-  ()
+    assert (nth (t::xs) 0 = Some t);
+    // da fuq why can't I use the lemma to prove this
+    option_lemma t;
+    assert (Some?.v (Some t) = t);
+    assert (Some?.v (nth (t::xs) 0) = t);
+    ()
 
 val byte_noninverse_lemma: ( z: byte {z <^ 255uy}) -> Lemma ( (1uy +^ z) <> 0uy )
 let byte_noninverse_lemma z = ()
@@ -116,26 +149,11 @@ val indexOf_notfirst_lemma: (#a: eqtype) -> (t: a) -> (l: list a {(l <> Nil) /\ 
       Lemma ((indexOf #a l t) <> (Some 0uy))
 let indexOf_notfirst_lemma #a t l = 
   match l with
-  | x::xs -> 
-    //assert (x <> t);
-    ()
-    (*
-    match (indexOf xs t) with
-    | Some xt ~> 
-      byte_noninverse_lemma xt;
-      assert ( (1uy +^ xt) <> 0uy );
-      assert ( Some (1uy +^ xt) <> (Some 0uy) );
-      assert ((indexOf (x::xs) t) = (
-          match (indexOf #a xs t) with
-          | Some r -> Some (1uy +^ r)
-          | None -> None
-      ));
-      ()
-    | None -> ()
-    *)
+  | x::xs -> ()
   | [] -> ()
 
-// let this be a warning for working at the wrong level of abstraction
+// let this be a warning for working at the wrong level of abstraction (mixing option and byte into it)
+// todo: rename it to start with nth4sure
 val indexOf_nth_inverse: 
           (#a: Type {hasEq a}) ->
           (l:list a {length l <= 255}) -> 
@@ -177,64 +195,72 @@ let rec indexOf_nth_inverse #a l t n =
         //assert (nth4sure (z::xs)) = 
   //| [] -> ()
 
+// todo: this only works for hexchars (or other lists where all values are different)
+val indexOf_inverse_lemma: (#a: eqtype) ->
+    (l: list a {length l <= 255}) ->
+    (n: nat { n < length l }) ->
+    Lemma (indexOf l (nth4sure l n) = Some (to_byte n))
+let rec indexOf_inverse_lemma #a l n =
+    let t = nth4sure l n in
+    if n = 0 then (
+      assert (indexOf l t = Some (to_byte 0));
+      ())
+    else ( // todo gotta prove that indexOf will take the second branch
+      match l with
+      | x::xs ->
+        assume (t <> x); // because all chars in hexchars are different
+        //assert (indexOf l t <> Some 0uy);
+        indexOf_inverse_lemma xs (n - 1);
+        //assert (indexOf l t = Some (1uy +^ (Some?.v (indexOf xs t))));
+        ()
+    )
+  
+    
+
 val some_lemma: (i: byte {i <=^ 0xFuy}) -> Lemma (i <^ (to_byte (length hexchars)))
 let some_lemma i = 
   len_lemma 16;
   ()
 
-
-val convert_pair: (p: (byte * byte) {in_hexchar (fst p) /\ in_hexchar (snd p)}) -> Tot (r: (r1:byte {in_hexchar r1} * r2:byte {in_hexchar r2}))
-let convert_pair p = (fst p, snd p) // uh, what? but necessary
-
-
-
-assume val bits4_equal_lemma: (a: bits4) -> (b: byte {(a &^ 0xFuy) = (b &^ 0xFuy)}) -> Lemma (a = (b &^ 0xFuy))
-
-type lo_equal a b = (a &^ 0xFuy) == (b &^ 0xFuy)
-type lo_equal_pair (a:(byte * byte)) (b:(byte * byte)) = (lo_equal (fst a) (fst b)) /\ (lo_equal (snd a) (snd b))
-
-val pair2byte: p:(bits4 * bits4) -> b:byte{
-    //lo_equal_pair (byte2pair b) p
-    ((b >>^ 4ul) &^ 0xFuy, b &^ 0xFuy) = (fst p, snd p)
-    //((b >>^ 4ul) &^ 0xFuy) = (fst p) /\
-    //(b &^ 0xFuy) = (snd p)
-}
-let pair2byte (hi, lo) =
-    bitand_idempotent lo;
-    bitand_idempotent (hi >>^ 4ul);
-    bitand_idempotent hi;
-    bitorshl_unaffect hi (lo &^ 0xFuy);
-    big_lemma hi lo;
-    let r = (hi <<^ 4ul) |^ (lo &^ 0xFuy) in
-    let rhi = (r >>^ 4ul) &^ 0xFuy in
-    let rlo = r &^ 0xFuy in
-    assert (rlo = (lo &^ 0xFuy));
-    assert ((rhi &^ 0xFuy) = (hi &^ 0xFuy));
-    bits4_equal_lemma hi rhi;
-    bits4_equal_lemma lo rlo;
-    r
-    // ((hi <<^ 4ul) |^ (lo &^ 0xFuy)) &^ F =need= lo & F
-    // (lo & F) & F =need= lo & F  bitorshl_unaffect hi (lo & F)
-    // lo & F == lo & F   bitand_idempotent lo
-
-    // the left part
-    // (((hi << 4) | (lo & F)) >> 4) & F =need  = hi & F
-
-// damn you machine, verify this!
-val pair_encode_decode_lemma: b:byte -> Lemma (b = pair2byte (byte2pair b))
-let pair_encode_decode_lemma b = ()
-
-
-val pair_decode_encode_lemma: p:(bits4 * bits4) -> Lemma (p = (byte2pair (pair2byte p)))
-let pair_decode_encode_lemma p = ()
-
-val ishex: (s: string {String.length s = 2}) -> (n:nat { n < 2 }) -> GTot bool
+val ishex: (s: string) -> (n:nat { n < 2 /\ String.length s > n }) -> GTot bool
 let ishex s i = 
   len_lemma 16;
   (indexOf hexchars (String.index s i)) <> None
 
 type hexstring1 = s:string {String.length s = 2 /\ (forall i. ishex s i)}
 type bitsofhexstr s i = b:bits4 {nth4sure hexchars (v b) = String.index s i}
+
+assume val string_of_char_lemma: c: char -> Lemma (String.index (String.string_of_char c) 0 = c)
+
+val lemma_about_hexcharstr: b: bits4 -> Lemma (ishex (hexcharstr b) 0)
+let lemma_about_hexcharstr b = 
+    let r = hexcharstr b in
+    let c = String.index r 0 in
+    let n = nth4sure hexchars (v b) in
+    // indexOf hexchars (yada-yada (nth4sure hexchars (v b)))
+    indexOf_inverse_lemma hexchars (v b);
+    string_of_char_lemma n;
+    //assert (String.index (String.string_of_char (nth4sure hexchars (v b))) 0 = (nth4sure hexchars (v b)));
+    assert (n = c); // need to add a lemma about string_of_char and index
+    //assert (indexOf hexchars (nth4sure hexchars (v b)) <> None);
+    assert (indexOf hexchars c <> None);
+    ()
+
+// todo rather lazy at this stage
+// todo there is already the lemma for this further down
+assume val lemma_about_strcat: 
+    (a: string {String.length a = 1 /\ ishex a 0}) -> 
+    (b: string {String.length b = 1 /\ ishex b 0}) -> 
+    (ab: string {ab = strcat a b}) -> 
+    Lemma (ishex ab 0 /\ ishex ab 1)
+
+let pair2hex (h, l): hexstring1 =
+    len_lemma 16;
+    lemma_about_hexcharstr l;
+    lemma_about_hexcharstr h;
+    let lh = strcat (hexcharstr l) (hexcharstr h) in
+    lemma_about_strcat (hexcharstr l) (hexcharstr h) lh;
+    lh
 
 val hex2pair: s:hexstring1 -> Tot ((bitsofhexstr s 1) * (bitsofhexstr s 0))
 let hex2pair (s: hexstring1) =
@@ -284,19 +310,70 @@ let hex2pair_encode_decode_lemma s =
     //assert (pair2hex (a, b) = s);
     ()
 
+(*
+// todo rename
+val sublemma: (p: (bits4 * bits4)) -> (ix: nat {ix < 2}) -> (sel: (bits4 * bits4 -> bits4)) -> (sel2: (bits4 * bits4 -> bits4)) ->
+      Lemma (let hex = pair2hex p in
+                (sel p) = (sel (convert_pair_bits4 hex (hex2pair hex))))
+let sublemma p ix sel sel2 = 
+    let hex = pair2hex p in
+    let c = nth4sure hexchars (v (sel p)) in
+    let c2 = nth4sure hexchars (v (sel2 p)) in
+    // jiu: (sel p) = 
+    strcat_lemma c c2 hex;
+    assert (String.index hex ix = nth4sure hexchars (sel p));
+    ()
+*)
+
+val hex2pair_decode_encode_lemma: (p: (bits4 * bits4)) -> 
+    Lemma (let r = hex2pair (pair2hex p) in
+              fst p = fst r /\
+              snd p = snd r)    // p = r doesn't work, probably because subtyping failure but probably could use the trick with convert_pair_bits4
+let hex2pair_decode_encode_lemma p =
+    // hex2pair x       ... expand
+    // indexOf hexchars (index x 0)      ... expand
+    // indexOf hexchars (index (pair2hex p) 0)  ... expand param
+    // in...            (index (strcat (hexcharstr p1) (hexcharstr p2)) 0)  ... expand, careful about endianness switch
+    //                          (string_of_char (nth4sure hexchars p1)) 0) ... didnt care about whether it should be p1 or p2
+    //                  (nth4sure hexchars p1) ... some lemma about index and string_to_char
+    //  p ... indexOf_inverse_lemma
+    //                          
+    len_lemma 16;
+    let hex = pair2hex p in
+    let hc = nth4sure hexchars (v (fst p)) in
+    let lc = nth4sure hexchars (v (snd p)) in
+    let p1 = fst (hex2pair hex) in
+    let p2 = snd (hex2pair hex) in
+    assert (nth4sure hexchars (v p1) = String.index hex 1); // from return type of (hex2pair hex)
+    assert (nth4sure hexchars (v p2) = String.index hex 0);
+    strcat_lemma lc hc hex; // -> S.index hex 0 = lc etc.
+    assert (String.index hex 1 = hc);
+    assert (String.index hex 0 = lc);
+    // hex2pair : -> S.index hex 0 = nth4sure hexchars (v b)
+    assert (Some p1 = indexOf hexchars (String.index hex 1));
+    assert (Some p2 = indexOf hexchars (String.index hex 0));
+    indexOf_inverse_lemma hexchars (v (fst p));
+    indexOf_inverse_lemma hexchars (v (snd p));
+    assert (fst p = fst (hex2pair hex));
+    assert (snd p = snd (hex2pair hex));
+    ()
+
+//    indexOf_inverse_lemma hexchars 
+//
+
+// ========= HEX -- BYTE =================
 val hex2byte: s:hexstring1 -> Tot byte
 let hex2byte s =
     let p = hex2pair s in
     pair2byte (fst p, snd p)
 
-// todo will probably need a (p = hex2pair (pair2hex p)) lemma
     
 val byte2hex: byte -> string
 let byte2hex b =
-    let pair = (byte2pair b) in
-    some_lemma (fst pair);
-    some_lemma (snd pair);
-    pair2hex (fst pair, snd pair)
+    let (hi, lo) = (byte2pair b) in
+    //some_lemma (fst pair);
+    //some_lemma (snd pair);
+    pair2hex (hi, lo)
 
 val hex_decode_encode_lemma: (s: hexstring1) -> Lemma (s = byte2hex (hex2byte s))
 let hex_decode_encode_lemma s =
@@ -310,8 +387,18 @@ let hex_decode_encode_lemma s =
     pair_decode_encode_lemma (fst p, snd p);
     ()
 
+// b =
+//   = hex2byte (byte2hex b)
+//   = pair2byte (hex2pair (byte2hex b))
+//   = pair2byte (hex2pair (pair2hex (byte2pair b)))    ... expand definition
+//   = pair2byte (byte2pair b) ... hex2pair_decode_encode_lemma
+//   = b ... pair_encode_decode_lemma
 val hex_encode_decode_lemma: b:byte -> Lemma (b = hex2byte (byte2hex b))
-let hex_encode_decode_lemma b = ()
+let hex_encode_decode_lemma b = 
+    let p = byte2pair b in
+    hex2pair_decode_encode_lemma p;
+    pair_encode_decode_lemma b;
+    ()
 
 (*
 val hex_encode_decode_lemma: b: byte -> Lemma (b = hex2byte (byte2hex b))
