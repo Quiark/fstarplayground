@@ -19,6 +19,7 @@ let hexchars = ['0'; '1'; '2'; '3'; '4'; '5'; '6'; '7'; '8'; '9';
 assume val len_lemma: int -> Lemma ( length hexchars = 16 )
 assume val to_byte: x:nat -> b:byte {v b = x}
 
+
 type in_hexchar x = x <^ (to_byte (length hexchars))
 type bits4 = x:byte {in_hexchar x}
 
@@ -195,9 +196,19 @@ let rec indexOf_nth_inverse #a l t n =
         //assert (nth4sure (z::xs)) = 
   //| [] -> ()
 
+
+type list_distinct (#a: eqtype) (l: list a) = forall x y. (x <> y) ==> (nth4sure l x <> nth4sure l y)
+// todo prove this
+assume val distinct_sublist: (#a: eqtype) -> (l: list a{Cons? l /\ list_distinct #a l}) -> Lemma (
+  match l with 
+  | x::xs -> list_distinct #a xs)
+//let distinct_sublist #a (x::xs) = ()
+
+assume val hexchars_unique: list_distinct hexchars
+
 // todo: this only works for hexchars (or other lists where all values are different)
 val indexOf_inverse_lemma: (#a: eqtype) ->
-    (l: list a {length l <= 255}) ->
+    (l: list a {length l <= 255 /\ Cons? l /\ list_distinct #a l}) ->
     (n: nat { n < length l }) ->
     Lemma (indexOf l (nth4sure l n) = Some (to_byte n))
 let rec indexOf_inverse_lemma #a l n =
@@ -208,19 +219,15 @@ let rec indexOf_inverse_lemma #a l n =
     else ( // todo gotta prove that indexOf will take the second branch
       match l with
       | x::xs ->
-        assume (t <> x); // because all chars in hexchars are different
+        assert (x = nth4sure l 0);
+        hexchars_unique;
+        assert (t <> x); // because all chars in hexchars are different
         //assert (indexOf l t <> Some 0uy);
+        distinct_sublist l;
         indexOf_inverse_lemma xs (n - 1);
         //assert (indexOf l t = Some (1uy +^ (Some?.v (indexOf xs t))));
         ()
     )
-  
-    
-
-val some_lemma: (i: byte {i <=^ 0xFuy}) -> Lemma (i <^ (to_byte (length hexchars)))
-let some_lemma i = 
-  len_lemma 16;
-  ()
 
 val ishex: (s: string) -> (n:nat { n < 2 /\ String.length s > n }) -> GTot bool
 let ishex s i = 
@@ -230,7 +237,37 @@ let ishex s i =
 type hexstring1 = s:string {String.length s = 2 /\ (forall i. ishex s i)}
 type bitsofhexstr s i = b:bits4 {nth4sure hexchars (v b) = String.index s i}
 
+
+// not in the library
 assume val string_of_char_lemma: c: char -> Lemma (String.index (String.string_of_char c) 0 = c)
+assume val string_of_char_reverse_lemma: (s: string {String.length s = 1}) -> 
+    Lemma (s = string_of_char (String.index s 0))
+
+assume val strcat_lemma: a:char -> b:char -> 
+    (ab:string{ab = strcat (string_of_char a) (string_of_char b)}) -> 
+    Lemma (String.index ab 0 = a /\ String.index ab 1 = b)
+
+assume val strcat_reverse_lemma: 
+    (ab: string {String.length ab = 2}) ->
+    (a:char {String.index ab 0 = a}) -> (b: char {String.index ab 1 = b}) -> 
+    Lemma (strcat (string_of_char a) (string_of_char b) = ab)
+
+// todo rather lazy at this stage
+// todo there is already the lemma for this further down
+val strcat_preserves_hex_lemma: 
+    (a: string {String.length a = 1 /\ ishex a 0}) -> 
+    (b: string {String.length b = 1 /\ ishex b 0}) -> 
+    (ab: string {ab = strcat a b}) -> 
+    Lemma (ishex ab 0 /\ ishex ab 1)
+let strcat_preserves_hex_lemma a b ab =
+    let ac = String.index a 0 in
+    let bc = String.index b 0 in
+    string_of_char_reverse_lemma a;
+    string_of_char_reverse_lemma b;
+    // assume (a = string_of_char ac);
+    // assume (b = string_of_char bc);
+    strcat_lemma ac bc ab;
+    ()
 
 val lemma_about_hexcharstr: b: bits4 -> Lemma (ishex (hexcharstr b) 0)
 let lemma_about_hexcharstr b = 
@@ -246,20 +283,12 @@ let lemma_about_hexcharstr b =
     assert (indexOf hexchars c <> None);
     ()
 
-// todo rather lazy at this stage
-// todo there is already the lemma for this further down
-assume val lemma_about_strcat: 
-    (a: string {String.length a = 1 /\ ishex a 0}) -> 
-    (b: string {String.length b = 1 /\ ishex b 0}) -> 
-    (ab: string {ab = strcat a b}) -> 
-    Lemma (ishex ab 0 /\ ishex ab 1)
-
 let pair2hex (h, l): hexstring1 =
     len_lemma 16;
     lemma_about_hexcharstr l;
     lemma_about_hexcharstr h;
     let lh = strcat (hexcharstr l) (hexcharstr h) in
-    lemma_about_strcat (hexcharstr l) (hexcharstr h) lh;
+    strcat_preserves_hex_lemma (hexcharstr l) (hexcharstr h) lh;
     lh
 
 val hex2pair: s:hexstring1 -> Tot ((bitsofhexstr s 1) * (bitsofhexstr s 0))
@@ -282,15 +311,6 @@ val nth_indexOf_lemma: (t:char) -> Lemma (t = nth4sure hexchars (indexOf hexchar
 let nth_indexOf_lemma t = ()
 *)
 
-assume val strcat_lemma: a:char -> b:char -> 
-    (ab:string{ab = strcat (string_of_char a) (string_of_char b)}) -> 
-    Lemma (String.index ab 0 = a /\ String.index ab 1 = b)
-
-assume val strcat_reverse_lemma: 
-    (ab: string {String.length ab = 2}) ->
-    (a:char {String.index ab 0 = a}) -> (b: char {String.index ab 1 = b}) -> 
-    Lemma (strcat (string_of_char a) (string_of_char b) = ab)
-
 let convert_pair_bits4 (s: hexstring1) (p:(bitsofhexstr s 1 * bitsofhexstr s 0)): (bits4 * bits4) = (fst p, snd p)
 
 // convert_pair_bits4 is necessary because F* is not very good at subtyping checks inside pairs
@@ -309,21 +329,6 @@ let hex2pair_encode_decode_lemma s =
     //assert (bh = String.index s 0);
     //assert (pair2hex (a, b) = s);
     ()
-
-(*
-// todo rename
-val sublemma: (p: (bits4 * bits4)) -> (ix: nat {ix < 2}) -> (sel: (bits4 * bits4 -> bits4)) -> (sel2: (bits4 * bits4 -> bits4)) ->
-      Lemma (let hex = pair2hex p in
-                (sel p) = (sel (convert_pair_bits4 hex (hex2pair hex))))
-let sublemma p ix sel sel2 = 
-    let hex = pair2hex p in
-    let c = nth4sure hexchars (v (sel p)) in
-    let c2 = nth4sure hexchars (v (sel2 p)) in
-    // jiu: (sel p) = 
-    strcat_lemma c c2 hex;
-    assert (String.index hex ix = nth4sure hexchars (sel p));
-    ()
-*)
 
 val hex2pair_decode_encode_lemma: (p: (bits4 * bits4)) -> 
     Lemma (let r = hex2pair (pair2hex p) in
@@ -400,13 +405,6 @@ let hex_encode_decode_lemma b =
     pair_encode_decode_lemma b;
     ()
 
-(*
-val hex_encode_decode_lemma: b: byte -> Lemma (b = hex2byte (byte2hex b))
-let hex_encode_decode_lemma b = 
-    pair_encode_decode_lemma b;
-    ()
-
-*)
 
 // note: 'bound variable X escapes, add type annotation' means to add annotation on the result type of the function
 
